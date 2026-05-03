@@ -32,9 +32,11 @@ def home():
         base_query += " AND r.school_year = %s"
         params.append(year)
 
+    # GET STUDENTS
     cursor.execute("SELECT s.lrn, s.name, r.gender " + base_query, params)
     students = cursor.fetchall()
 
+    # METRICS
     cursor.execute("""
         SELECT 
             COUNT(*),
@@ -54,30 +56,21 @@ def home():
     cursor.close()
     conn.close()
 
-    # after retention
     try:
         retention = compute_retention("2024-2025", "2025-2026")
     except:
         retention = {"rate": 0, "retained": 0, "dropped": 0}
 
-# 👇 ADD THIS
-    try:
-        promotion = compute_promotion("2024-2025", "2025-2026", 9, 10)
-    except:
-        promotion = {"rate": 0, "promoted": 0, "repeated": 0, "dropped": 0}
-
     return render_template(
-    "index.html",
-    students=students,
-    total=total,
-    male=male,
-    female=female,
-    male_pct=male_pct,
-    female_pct=female_pct,
-    retention=retention,
-    promotion=promotion   # 👈 ADD THIS
+        "index.html",
+        students=students,
+        total=total,
+        male=male,
+        female=female,
+        male_pct=male_pct,
+        female_pct=female_pct,
+        retention=retention
     )
-    
 
 def get_metrics():
     conn = get_db_connection()
@@ -91,60 +84,42 @@ def get_metrics():
 
     return total
 
-def compute_promotion(year1, year2, grade_from, grade_to):
+def compute_retention(year1, year2):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Promoted students
+    # Retained (intersection)
     cursor.execute("""
-        SELECT COUNT(*)
+        SELECT COUNT(*) 
         FROM student_records r1
-        JOIN student_records r2
+        JOIN student_records r2 
         ON r1.lrn = r2.lrn
         WHERE r1.school_year = %s
         AND r2.school_year = %s
-        AND r1.grade_level = %s
-        AND r2.grade_level = %s
-    """, (year1, year2, grade_from, grade_to))
+    """, (year1, year2))
 
-    promoted = cursor.fetchone()[0]
+    retained = cursor.fetchone()[0]
 
-    # Total students in base grade
+    # Total in year1
     cursor.execute("""
         SELECT COUNT(DISTINCT lrn)
         FROM student_records
         WHERE school_year = %s
-        AND grade_level = %s
-    """, (year1, grade_from))
+    """, (year1,))
 
-    total = cursor.fetchone()[0]
+    total_year1 = cursor.fetchone()[0]
 
-    # Repeated (same grade again)
-    cursor.execute("""
-        SELECT COUNT(*)
-        FROM student_records r1
-        JOIN student_records r2
-        ON r1.lrn = r2.lrn
-        WHERE r1.school_year = %s
-        AND r2.school_year = %s
-        AND r1.grade_level = %s
-        AND r2.grade_level = %s
-    """, (year1, year2, grade_from, grade_from))
+    dropped = total_year1 - retained
 
-    repeated = cursor.fetchone()[0]
-
-    dropped = total - (promoted + repeated)
-
-    promotion_rate = (promoted / total * 100) if total > 0 else 0
+    retention_rate = (retained / total_year1 * 100) if total_year1 > 0 else 0
 
     cursor.close()
     conn.close()
 
     return {
-        "promoted": promoted,
-        "repeated": repeated,
+        "retained": retained,
         "dropped": dropped,
-        "rate": round(promotion_rate, 2)
+        "rate": round(retention_rate, 2)
     }
 
 @app.route('/upload', methods=['POST'])
@@ -160,15 +135,19 @@ def upload():
 
         df = pd.read_excel(file, header=None)
 
+        # Skip header rows
         df = df.iloc[6:]
 
+        # Drop empty columns
         df = df.dropna(axis=1, how='all')
 
+        # Reset column index
         df.columns = range(df.shape[1])
 
         print("\n===== DATA SAMPLE =====")
         print(df.head())
 
+        # 🧠 Detect columns dynamically
         lrn_col = None
         name_col = None
         sex_col = None
@@ -189,15 +168,18 @@ def upload():
         print("NAME COL:", name_col)
         print("SEX COL:", sex_col)
 
+        # ❌ Stop if detection failed
         if lrn_col is None or name_col is None or sex_col is None:
             return "Column detection failed. Check Excel format."
 
+        # ✅ Rename columns
         df = df.rename(columns={
             lrn_col: 'LRN',
             name_col: 'NAME',
             sex_col: 'SEX'
         })
 
+        # Keep only needed columns
         df = df[['LRN', 'NAME', 'SEX']]
 
         # Clean data
