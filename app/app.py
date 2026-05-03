@@ -32,6 +32,11 @@ def home():
         base_query += " AND r.school_year = %s"
         params.append(year)
 
+    # GET STUDENTS
+    cursor.execute("SELECT s.lrn, s.name, r.gender " + base_query, params)
+    students = cursor.fetchall()
+
+    # METRICS
     cursor.execute("SELECT s.lrn, s.name, r.gender " + base_query, params)
     students = cursor.fetchall()
 
@@ -60,6 +65,16 @@ def home():
     except:
         retention = {"rate": 0, "retained": 0, "dropped": 0}
 
+    return render_template(
+        "index.html",
+        students=students,
+        total=total,
+        male=male,
+        female=female,
+        male_pct=male_pct,
+        female_pct=female_pct,
+        retention=retention
+    )
 # 👇 ADD THIS
     try:
         promotion = compute_promotion("2024-2025", "2025-2026", 9, 10)
@@ -91,6 +106,23 @@ def get_metrics():
 
     return total
 
+def compute_retention(year1, year2):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Retained (intersection)
+    cursor.execute("""
+        SELECT COUNT(*) 
+        FROM student_records r1
+        JOIN student_records r2 
+        ON r1.lrn = r2.lrn
+        WHERE r1.school_year = %s
+        AND r2.school_year = %s
+    """, (year1, year2))
+
+    retained = cursor.fetchone()[0]
+
+    # Total in year1
 def compute_promotion(year1, year2, grade_from, grade_to):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -114,6 +146,13 @@ def compute_promotion(year1, year2, grade_from, grade_to):
         SELECT COUNT(DISTINCT lrn)
         FROM student_records
         WHERE school_year = %s
+    """, (year1,))
+
+    total_year1 = cursor.fetchone()[0]
+
+    dropped = total_year1 - retained
+
+    retention_rate = (retained / total_year1 * 100) if total_year1 > 0 else 0
         AND grade_level = %s
     """, (year1, grade_from))
 
@@ -141,6 +180,9 @@ def compute_promotion(year1, year2, grade_from, grade_to):
     conn.close()
 
     return {
+        "retained": retained,
+        "dropped": dropped,
+        "rate": round(retention_rate, 2)
         "promoted": promoted,
         "repeated": repeated,
         "dropped": dropped,
@@ -160,6 +202,13 @@ def upload():
 
         df = pd.read_excel(file, header=None)
 
+        # Skip header rows
+        df = df.iloc[6:]
+
+        # Drop empty columns
+        df = df.dropna(axis=1, how='all')
+
+        # Reset column index
         df = df.iloc[6:]
 
         df = df.dropna(axis=1, how='all')
@@ -169,6 +218,7 @@ def upload():
         print("\n===== DATA SAMPLE =====")
         print(df.head())
 
+        # 🧠 Detect columns dynamically
         lrn_col = None
         name_col = None
         sex_col = None
@@ -189,6 +239,11 @@ def upload():
         print("NAME COL:", name_col)
         print("SEX COL:", sex_col)
 
+        # ❌ Stop if detection failed
+        if lrn_col is None or name_col is None or sex_col is None:
+            return "Column detection failed. Check Excel format."
+
+        # ✅ Rename columns
         if lrn_col is None or name_col is None or sex_col is None:
             return "Column detection failed. Check Excel format."
 
@@ -198,6 +253,7 @@ def upload():
             sex_col: 'SEX'
         })
 
+        # Keep only needed columns
         df = df[['LRN', 'NAME', 'SEX']]
 
         # Clean data
